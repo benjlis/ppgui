@@ -1,0 +1,1 @@
+Query a large, rich and expanding collection of records journalists have gathered to document the government response to COVID-19 in the critical first months of the pandemic. 
