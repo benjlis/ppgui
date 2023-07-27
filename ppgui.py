@@ -4,7 +4,7 @@ import psycopg2
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 from st_aggrid.shared import JsCode
 
-VERSION = 'Beta-v0.2'
+VERSION = 'Beta-v0.3'
 TITLE = f'Pandemic Program Document Search'
 SEARCH_LABEL = "Search:" 
 SEARCH_PLACEHOLDER = "Full-text search across document collection"
@@ -44,22 +44,22 @@ select count(page_id) hits, doc_id, title, pg_cnt,
 """
 # TBD - update
 pg_qry = """
-select to_char(authored,'YYYY-MM-DD') published, 
-       '[' || f.title || '](' || source || ')' title,
-       d.page_count pages, d.redactions,
-       ts_headline('english', f.body, 
-                   websearch_to_tsquery('english', '{search}'),
-                   'StartSel=**, StopSel=**') snippet  
-    from foiarchive.docs f join declassification_pdb.docs d 
-                                on (f.doc_id = d.id) 
-    where full_text @@ websearch_to_tsquery('english', '{search}') and
-          corpus = 'pdb'
-    order by authored;
+select d.pg, 
+       ts_headline('english', 
+                   regexp_replace(d.body, '\r|\n', ' ', 'g'), 
+                   websearch_to_tsquery('english', '{search}'), 
+                   'maxfragments=6') snippet 
+    from covid19_muckrock.docpages_authorized d 
+    where doc_id = {doc_id} and 
+          full_text @@ websearch_to_tsquery('english', '{search}') 
+    order by d.pg;
 """
 
 #
 # streamlit-aggrid initializations and configurations
 #
+response = {}
+css_fix = {"#gridToolBar": {"padding-bottom": "0px !important"}}
 gb = GridOptionsBuilder()
 gb.configure_default_column(resizable=True, filterable=True, 
                             sortable=True, editable=True)
@@ -78,7 +78,6 @@ cell_renderer=JsCode("""
             this.eGui.innerText = params.value;
             this.eGui.setAttribute('href', params.value);
             this.eGui.setAttribute('style', "text-decoration:none");
-            this.eGui.setAttribute('target', "_blank");
           }
           getGui() {
             return this.eGui;
@@ -91,6 +90,7 @@ gb.configure_column(field="pdf_url", header_name="URL",
 gb.configure_grid_options(editable=True)
 # Note: some weirdness with pagination in the release we're using
 gb.configure_pagination(enabled=True, paginationPageSize=10)
+gb.configure_selection(selection_mode='single', groupSelectsChildren=False)
 go = gb.build()
 
 
@@ -100,7 +100,7 @@ def convert_df(df):
     # IMPORTANT: Cache the conversion to prevent computation on every rerun
     return df.to_csv().encode('utf-8')
 
-# Search
+# Search across docs
 srchstr = st.text_input(label=SEARCH_LABEL,
                         placeholder=SEARCH_PLACEHOLDER,
                         help=SEARCH_HELP)
@@ -111,14 +111,28 @@ else:
     if doc_df.empty:
         st.markdown(f"Your search `{srchstr}` did not match any documents")
     else:
-        # st.markdown(doc_df.to_markdown(index=False))
-        AgGrid(doc_df, gridOptions=go, allow_unsafe_jscode=True,
-               updateMode=GridUpdateMode.VALUE_CHANGED, height=500,
-               custom_css={"#gridToolBar": {"padding-bottom": "0px !important"}})
         csv = convert_df(doc_df)
         st.download_button(label='CSV Download', data=csv,
                            file_name='pp.csv', mime='text/csv')
+        # st.markdown(doc_df.to_markdown(index=False))
+        response = AgGrid(doc_df, gridOptions=go, 
+                          allow_unsafe_jscode=True,
+                          updateMode=GridUpdateMode.SELECTION_CHANGED, 
+                          height=500, custom_css=css_fix)
 
+
+# Highlights from pages  
+if 'running' in st.session_state and response:      
+    selected = response['selected_rows']
+    if selected:
+        doc_id = selected[0]["doc_id"]
+        title = selected[0]["title"]
+        pg_df = pd.read_sql_query(pg_qry.format(search=srchstr, 
+                                                doc_id=doc_id), conn)
+        st.markdown(f'References to _{srchstr}_ in **{title}** ({doc_id}):')
+        st.markdown(pg_df.to_markdown(index=False), 
+                    unsafe_allow_html=True)
+        
 # Footer
 st.subheader("About")
 with open("./assets/pp.md", "r") as f:
