@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+from st_aggrid.shared import JsCode
 
-VERSION = 'Beta-v0.1.1'
+VERSION = 'Beta-v0.2'
 TITLE = f'Pandemic Program Document Search'
 SEARCH_LABEL = "Search:" 
 SEARCH_PLACEHOLDER = "Full-text search across document collection"
@@ -14,15 +16,16 @@ st.image('assets/covid19-image.png', use_column_width='always')
 st.title(TITLE)
 st.caption(VERSION)
 
-
-# Database functions
+#
+# Database functions, initializatons and queries
+#
 @st.cache_resource
 def init_connection():
     return psycopg2.connect(**st.secrets["postgres"])
 
 
 # Execute query.
-@st.cache_data(ttl="1h")
+@st.cache_data(ttl="1d")
 def run_query(query):
     with conn.cursor() as cur:
         cur.execute(query)
@@ -31,8 +34,8 @@ def run_query(query):
 
 conn = init_connection()
 doc_qry = """
-select count(page_id) Hits, doc_id Id, title Title, pg_cnt Pages, pdf_url URL,
-       dc_organization Organization, dc_username Submitter 
+select count(page_id) hits, doc_id, title, pg_cnt, 
+       dc_organization, dc_username, pdf_url
     from covid19_muckrock.docpages_authorized
     where full_text @@ websearch_to_tsquery('english', '{search}') 
     group by doc_id, title, pg_cnt, pdf_url, 
@@ -54,6 +57,43 @@ select to_char(authored,'YYYY-MM-DD') published,
     order by authored;
 """
 
+#
+# streamlit-aggrid initializations and configurations
+#
+gb = GridOptionsBuilder()
+gb.configure_default_column(resizable=True, filterable=True, 
+                            sortable=True, editable=True)
+gb.configure_column(field="hits", header_name="Hits", width=80)
+gb.configure_column(field="doc_id", header_name="ID", width=100)
+gb.configure_column(field="title", header_name="Title", width=420, 
+                    tooltipField="title")
+gb.configure_column(field="pg_cnt", header_name="Pages", width=80)
+gb.configure_column(field="dc_organization", header_name="Organization", width=140)
+gb.configure_column(field="dc_username", header_name="Contributor", width=160,
+                    tooltipField="dc_username")
+cell_renderer=JsCode("""
+        class UrlCellRenderer {
+          init(params) {
+            this.eGui = document.createElement('a');
+            this.eGui.innerText = params.value;
+            this.eGui.setAttribute('href', params.value);
+            this.eGui.setAttribute('style', "text-decoration:none");
+            this.eGui.setAttribute('target', "_blank");
+          }
+          getGui() {
+            return this.eGui;
+          }
+        }
+    """)
+gb.configure_column(field="pdf_url", header_name="URL", 
+                    cellRenderer=cell_renderer, width=700,
+                    tooltipField="pdf_url")
+gb.configure_grid_options(editable=True)
+# Note: some weirdness with pagination in the release we're using
+gb.configure_pagination(enabled=True, paginationPageSize=10)
+go = gb.build()
+
+
 
 @st.cache_data
 def convert_df(df):
@@ -71,10 +111,13 @@ else:
     if doc_df.empty:
         st.markdown(f"Your search `{srchstr}` did not match any documents")
     else:
+        # st.markdown(doc_df.to_markdown(index=False))
+        AgGrid(doc_df, gridOptions=go, allow_unsafe_jscode=True,
+               updateMode=GridUpdateMode.VALUE_CHANGED, height=500,
+               custom_css={"#gridToolBar": {"padding-bottom": "0px !important"}})
         csv = convert_df(doc_df)
         st.download_button(label='CSV Download', data=csv,
                            file_name='pp.csv', mime='text/csv')
-        st.markdown(doc_df.to_markdown(index=False))
 
 # Footer
 st.subheader("About")
