@@ -1,3 +1,4 @@
 streamlit==1.25.0
 psycopg2-binary==2.9.6
 tabulate==0.9.0
+streamlit-aggrid==0.3.4.post3
